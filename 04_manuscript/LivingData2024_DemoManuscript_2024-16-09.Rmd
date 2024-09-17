@@ -1,0 +1,55 @@
+---
+title: "Manscript Demo"
+author: "Parker K Lund"
+date: "2024-09-17"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+bibliography: [references.bib,grateful-refs.bib]
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Abstract
+
+This is where you write the abstract!!
+
+@ahmed2019 **loves** it [@ahmed2019]!
+
+# Introduction
+
+# Methods
+
+# Results
+
+```{r summary, echo=FALSE}
+
+# Echo tells it whether to show the code and output plot or just the plot. 
+summary(cars)
+
+```
+
+```{r table, echo=FALSE}
+
+knitr::kable(head(iris), align = "l", caption = "Table 1 - Incredible Table")
+
+```
+
+<!-- Comments -->
+
+```{r pressure, echo=FALSE}
+
+# Echo tells it whether to show the code and output plot or just the plot. 
+plot(pressure)
+
+```
+
+# Discussion
+
+# References
+
+

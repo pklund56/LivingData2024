@@ -1,0 +1,92 @@
+---
+title: "DataCleaning"
+author: "Parker K Lund"
+date: "2024-09-13"
+output: html_document
+# The Problem: Assign all higher-level taxonomic information for the invertebrate morpho-species identified in the bromeliad dataset (this information is in the abundance table). One issue that will arise when assigning taxonomy with the taxize package is sometimes there is ambiguity in a taxonomic name (like Oligachaeta). In this case, you would select the best match manually in the Console. If there is taxa that is identified incorrectly, you may want to try a different database. This was an issue with Hirudinea. This sort of problem would be difficult to identify if you weren't familiar with the correct taxonomy. The taxize package is able to handle Unknown taxonomy and will assign the species as unidentified. This data could be removed, but it would depend on the research question.
+
+# The Solution: Load packages, import abundance table, pull out only taxonomy information from bwg_name column, create a smaller list of unique taxonomy (to speed up the database search), use taxize package to assign taxa, convert nested list into table, double-check that the assigned taxonomy is correct, merge with abundance table. This is a breif description; more details are in the comments below. 
+
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+```{r packages}
+
+### Initial Set-Up ###
+
+# Check your working directory
+getwd()
+
+# Install and call required packages
+pkgs <- c("taxize", "assertr", "stringdist", 
+          "tidyverse", "GGally")
+# lapply(pkgs, install.packages, character.only = TRUE)
+lapply(pkgs, library, character.only = TRUE)
+rm(pkgs)
+
+```
+
+```{r import}
+
+### Import Files ###
+
+# Examine files in folder
+myfiles <- list.files(path = "05_classtutorials/BWG_database/", pattern = "*.csv", full.names = TRUE)
+myfiles
+
+# Import all tables as separate data frames, remove file path and file extensions (.csv)
+list2env(
+  lapply(
+    setNames(myfiles, 
+             make.names(
+               gsub(".*1_", "", 
+                    tools::file_path_sans_ext(myfiles)))), 
+         read_csv), 
+  envir = .GlobalEnv)
+
+```
+
+```{r taxize}
+
+### Assign Taxonomy ###
+
+# Taxonomy data is located in the abundance table.
+
+# Create a new column called query in the Abundance table that removes everything after the . in the bwg_name column
+abundance$query = gsub("\\..*","", abundance$bwg_name)
+
+# Create a list of unique taxa names from the query column
+taxa.list = abundance %>% 
+  distinct(Taxa = query)
+
+# Search for upstream taxonomy in the NCBI database
+(tax.assign <- classification(unlist(taxa.list), db = "ncbi"))
+## You will need to manually select taxa with ambiguity in the Console, like with Oligochaeta
+
+# Convert data from a nested list into a tibble
+tax.extract = tax.assign %>% 
+  cbind() %>% # If you choose a different database, you may need to rbind() instead
+  tibble() %>% 
+  ## Keep 'query' column for merging below, otherwise only select the 'traditional' taxonomic levels (i.e., KPCOFGP)
+  ## Using any_of will only select columns that exist, which is useful if some taxonomic ranks were not identified
+  select(any_of(c("kingdom", "phylum", "class", "order", 
+                     "family", "genus", "species","query")))
+
+# View tax.extract to double-check for errors before merging with the abundance data
+view(tax.extract)
+
+# Merge with the abundance data using the query column
+abundance.clean = abundance %>% left_join(., tax.extract, by = "query")
+
+view(abundance.clean)
+
+```
+
