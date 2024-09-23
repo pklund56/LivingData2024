@@ -8,6 +8,7 @@ output:
 editor_options:
   chunk_output_type: console
 bibliography: [references.bib,grateful-refs.bib]
+csl: chicago-author-date-16th-edition.csl
 ---
 
 ```{r setup, include=FALSE}
