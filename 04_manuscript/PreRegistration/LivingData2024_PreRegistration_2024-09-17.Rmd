@@ -4,7 +4,7 @@ shorttitle      : "My preregistration"
 date            : "`r Sys.setlocale('LC_TIME', 'C'); format(Sys.time(), '%d\\\\. %B %Y')`"
 
 author: 
-  - name        : Parker K Lund
+  - name        : Anonymous
     affiliation : "1,2"
 
 affiliation:

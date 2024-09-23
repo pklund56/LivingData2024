@@ -1,6 +1,6 @@
 ---
 title: "Manscript Demo"
-author: "Parker K Lund"
+author: "Anonymous"
 date: "2024-09-17"
 output:
   pdf_document: default
