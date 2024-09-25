@@ -3,28 +3,294 @@ title: "AnemoneTempExp2_phyloseq"
 author: "Anonymous"
 date: "2024-09-07"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+# Import and Filtering
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+## Clear Files
+```{r delete, echo=FALSE}
+rm(list=ls())     # This clears all the data and values saved in your session.
+# remove(list=c("object_name"))    # This will remove a specific thing from the global environment if you need to.
 ```
 
-## Including Plots
+## Import Data
+```{r import, echo=FALSE}
 
-You can also embed plots, for example:
+# Set-Up Project and Directory
+project <- "LivingData2024"
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+# Import Sequence Data
+file=paste("00_rawdata/",project,"_AnemoneExp2Sequences_2024-09-22.rds",sep="")
+sequences=readRDS(file)
+
+# Import Taxonomy
+file=paste("00_rawdata/",project,"_AnemoneExp2ASVTaxaTable_2024-09-22.rds",sep="")
+taxa = readRDS(file)
+
+# Import Metadata
+file=paste("00_rawdata/",project,"_AnemoneExp2Metadata_2024-09-22.csv",sep="")
+metadata=read.csv(file, header=TRUE)
+
+# Remove samples from metadata that aren't in this sequencing set
+# metadata=metadata[-which(metadata$sampleid == "MT8T2"), ] # There are none in this set. 
+
+# Fix rownames for combining into phyloseq object.
+rownames(metadata) = metadata$project.id
+rownames(sequences) = rownames(metadata) 
+# Extract sample names.
+sample.names=rownames(sequences)
+
+
+# Install phyloseq to combine sequences, taxa, and metadata into one object.
+# BiocManager::install("phyloseq")
+library(phyloseq)
+
+# Create phyloseq object
+physeq=phyloseq(otu_table(sequences, taxa_are_rows=FALSE), sample_data(metadata), tax_table(taxa))
+
+# Explore taxa, they should be mostly bacteria
+tax_short=data.frame(tax_table(physeq))
+rownames(tax_short)=NULL # Sets row names numerically instead of sequences
+head(tax_short)
+unique(tax_short$Kingdom) # Checks which Kingdoms need to be removed
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## Filtering
+```{r filter, echo=FALSE}
+# Remove archaea and unnassigned taxa
+physeq.sub.arch= subset_taxa(physeq, Kingdom =="Bacteria") #Subsets data to only include Kingdom Bacteria
+ntaxa(physeq)-ntaxa(physeq.sub.arch) # check how many were removed ### 33
+tax_short=data.frame(tax_table(physeq.sub.arch))
+rownames(tax_short)=NULL
+head(tax_short)
+length(unique(tax_short$Phylum)) # Counts unique phyla ## 41
+length(sort(unique(tax_short$Family))) # Counts families ## 231
+
+# Remove Mitrochondria and Chloroplasts
+physeq.sub.arch = subset_taxa(physeq.sub.arch, Order!="Chloroplast")
+ntaxa(physeq)-ntaxa(physeq.sub.arch) # How many removed? ### 414 removed total
+physeq.sub.arch <- subset_taxa(physeq.sub.arch, Family!="Mitochondria")
+ntaxa(physeq)-ntaxa(physeq.sub.arch) # How many removed? ### 918 removed total
+#Over-writes previous tax_short, can search file to make sure chloro/mito are removed.
+tax_short=data.frame(tax_table(physeq.sub.arch)) 
+rownames(tax_short)=NULL
+head(tax_short)
+length(unique(tax_short$Phylum)) # Counts how many phyla are left ### 27
+length(sort(unique(tax_short$Family))) # Counts how many families are left ### 230
+
+
+# Check differences in sample depth overall and between treatments.
+library(ggplot2)
+sample_sums(physeq.sub.arch)
+sdt=data.frame(as(sample_data(physeq.sub.arch), 'data.frame'), TotalReads= sample_sums(physeq.sub.arch), keep.rownames=TRUE)
+#Plot sequencing depth. Replace (treatment~.) with a treatment from the metadata file.
+qSeqDepth=ggplot(sdt, aes(TotalReads)) +geom_histogram() +facet_wrap(~temp.treatment) 
+plot(qSeqDepth)
+### The distribution of reads doesn't seem super different between sites, but overall most are low.
+
+
+# Save non-normalized phyloseq object.
+file = paste("02_outdata/",project,"_AnemoneExp2NonNormalizePhyloseq_2024-09-22.rds",sep="")
+saveRDS(physeq.sub.arch, file = file)
+
+
+
+```
+
+
+## CSS Normalization
+```{r normalize, echo=FALSE}
+
+# NORMALIZE WITH CSS
+
+# BiocManager::install("metagenomeSeq") 
+library(metagenomeSeq)
+
+# Convert from filtered phyloseq object to metagenomeseq object:
+metaSeqObject1=phyloseq_to_metagenomeSeq(physeq.sub.arch)
+p=cumNormStatFast(metaSeqObject1)
+metaSeqObject_CSS=cumNorm(metaSeqObject1, p) # CSS normalization function
+metaSeqObject_CSS_filt=filterData(metaSeqObject_CSS, depth=1000) #Excludes low reads, minimum depth is 1000.
+# With 1000 minimum depth, 0 samples were removed
+seq.asv.css=data.frame(MRcounts(metaSeqObject_CSS_filt, norm=TRUE, log=TRUE)) # Convert back to an asv table, now css corrected.
+
+# Fixes column names in the ASV table to match our metadata by erasing the X character at the beginning.
+names(seq.asv.css) = gsub(pattern = "X", replacement = "", x = names(seq.asv.css)) 
+
+# Remove samples that were filtered out from the metadata file before remaking phyloseq object. 
+
+sample.names2=colnames(seq.asv.css) #Pull the sample names from the sequence table.
+deleted=print(setdiff(sample.names,sample.names2)) #Creates an object listing the sample names that were removed during normalization.
+metadata=metadata[!row.names(metadata) %in% deleted,] #Delete samples that were removed during normalization from metadata
+# Create phyloseq object.
+physeq.sub.arch=phyloseq(otu_table(seq.asv.css, taxa_are_rows=TRUE), sample_data(metadata), tax_table(taxa))
+physeq.sub.arch
+# If sample names are column names in the sequence table, taxa_are_rows=TRUE
+# If samples names are row names, taxa_are_rows=FALSE
+# I want to convert back to a phyloseq object so I can use the microbiome package to run an NMDS
+
+```
+
+
+
+
+# ORDINATION ANALYSIS
+
+## Ordination and Permanova
+```{r ordination, echo=FALSE}
+
+# Remove mock community samples
+physeq.sub.arch= subset_samples(physeq.sub.arch, species!="mock")
+
+# Set which phyloseq object to pull data from and which species
+object=physeq.sub.arch
+
+
+library(vegan)
+library(ggplot2)
+#install.packages("ggthemes")
+library(ggthemes)
+#BiocManager::install("microbiome")
+library(microbiome)
+#install.packages("svglite")
+library(svglite)
+
+### Jaccard + NMDS ###
+
+distance=c("jaccard")
+ordmethod=c("NMDS")
+
+ord_relabun = microbiome::transform(object, "compositional") # Transforms otu_table into relative abundance.
+relabun=as.data.frame(otu_table(ord_relabun)) # Extracted otu_table converted to relative abundance.
+ordination = ordinate(object, ordmethod, distance, k=2)
+ordination
+# Make Ordination Plot
+plot = plot_ordination(ord_relabun,
+                       ordination,
+                       color="temp.treatment",
+                       shape="species",
+                       axes=1:2) +
+  theme(plot.title=element_text(hjust=0, size=12)) +
+  geom_point(size=4) +
+  scale_color_manual('Temperature', values=c('#156b88','#249fa4','#deae21','#d35619','#b7322e')) +
+  scale_shape_manual('Sample Type', values=c(19,15,17,18,5,8,13)) +
+  theme_bw(base_size=14) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank()) + stat_ellipse() + facet_wrap(~species)
+plot
+
+file = paste("03_figs/",project,"_",distance,"_",ordmethod,".svg",sep="")
+file
+ggsave(file,height = 4, width =7, units = 'in')
+
+### Jaccard + PCoA ###
+
+distance=c("jaccard")
+ordmethod=c("PCoA")
+
+ord_relabun = microbiome::transform(object, "compositional") # Transforms otu_table into relative abundance.
+ordination = ordinate(object, ordmethod, distance)
+# Make Ordination Plot
+plot = plot_ordination(ord_relabun,
+                       ordination,
+                       color="temp.treatment",
+                       shape="species",
+                       axes=1:2) +
+  theme(plot.title=element_text(hjust=0, size=12)) +
+  geom_point(size=4) +
+  scale_color_manual('Temperature', values=c('#156b88','#249fa4','#deae21','#d35619','#b7322e')) +
+  scale_shape_manual('Sample Type', values=c(19,15,17,18,5,8,13)) +
+  theme_bw(base_size=14) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank()) + stat_ellipse() + facet_wrap(~species)
+plot
+
+file = paste("03_figs/",project,"_",distance,"_",ordmethod,".svg",sep="")
+file
+ggsave(file,height = 4, width =7, units = 'in')
+
+### Bray-Curtis + PCoA ###
+
+distance=c("bray")
+ordmethod=c("PCoA")
+
+ord_relabun = microbiome::transform(object, "compositional") # Transforms otu_table into relative abundance.
+ordination = ordinate(object, ordmethod, distance)
+# Make Ordination Plot
+plot = plot_ordination(ord_relabun,
+                       ordination,
+                       color="temp.treatment",
+                       shape="species",
+                       axes=1:2) +
+  theme(plot.title=element_text(hjust=0, size=12)) +
+  geom_point(size=4) +
+  scale_color_manual('Temperature', values=c('#156b88','#249fa4','#deae21','#d35619','#b7322e')) +
+  scale_shape_manual('Sample Type', values=c(19,15,17,18,5,8,13)) +
+  theme_bw(base_size=14) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank()) + stat_ellipse() + facet_wrap(~species)
+plot
+
+file = paste("03_figs/",project,"_",distance,"_",ordmethod,".svg",sep="")
+file
+ggsave(file,height = 4, width =7, units = 'in')
+
+
+### Bray-Curtis + NMDS ###
+
+distance=c("bray")
+ordmethod=c("NMDS")
+
+ord_relabun = microbiome::transform(object, "compositional") # Transforms otu_table into relative abundance.
+ordination = ordinate(object, ordmethod, distance, k=2)
+# Make Ordination Plot
+plot = plot_ordination(ord_relabun,
+                       ordination,
+                       color="temp.treatment",
+                       shape="species",
+                       axes=1:2) +
+  theme(plot.title=element_text(hjust=0, size=12)) +
+  geom_point(size=4) +
+  scale_color_manual('Temperature', values=c('#156b88','#249fa4','#deae21','#d35619','#b7322e')) +
+  scale_shape_manual('Sample Type', values=c(19,15,17,18,5,8,13)) +
+  theme_bw(base_size=14) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank()) + stat_ellipse() + facet_wrap(~species)
+plot
+
+file = paste("03_figs/",project,"_",distance,"_",ordmethod,".svg",sep="")
+file
+ggsave(file,height = 4, width =7, units = 'in')
+
+file = paste("03_figs/",project,"_",distance,"_",ordmethod,".png",sep="")
+file
+ggsave(file,height = 4, width =7, units = 'in')
+
+
+
+#Permanova, Bray-Curtis distances
+meta_perm = data.frame(sample_data((ord_relabun)))
+bray_perm = phyloseq::distance(physeq=ord_relabun, method="bray")
+set.seed(995)
+stats_perm = adonis2(bray_perm~temp.treatment2, data=meta_perm)
+stats_perm
+# Significant for temp.treatment, P=0.001 ***
+# F = 7.8337
+
+# Pairwise Permanova
+#install.packages("remotes")
+#library(remotes)
+#remotes::install_github("phytomosaic/ecole")
+library(ecole)
+
+permpair = permanova_pairwise(bray_perm, meta_perm$temp.treatment2, permutations = 999, method = "bray", padj = "BH")
+# Significant difference between all groups 
+
+file = paste("02_outdata/",project,"_AnemoneExp2PERMAPAIR_2024-09-22.csv",sep="")
+write.csv(permpair, file = file)
+
+
+```
